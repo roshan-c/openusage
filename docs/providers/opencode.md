@@ -2,7 +2,7 @@
 
 Tracks your OpenCode-hosted usage — the **Go** subscription and the **Zen** pay-as-you-go gateway. Go
 plan windows come from OpenCode's official usage API. Spend tiles and the usage trend still come from
-OpenCode's logs already on your Mac.
+OpenCode's logs and pi session logs already on your Mac.
 
 ## What it tracks
 
@@ -64,7 +64,7 @@ still read 0% because less than 1% has been used.
 - **"Couldn't read OpenCode's auth.json"** — the file exists but is unreadable or not valid JSON. Check
   its permissions, or log into OpenCode Go again to rewrite it.
 - **Spend tiles show "No data"** — OpenUsage needs OpenCode's local database at
-  `~/.local/share/opencode/opencode*.db`. Run an OpenCode session, then refresh.
+  `~/.local/share/opencode/opencode*.db` or pi session logs with Go/Zen usage. Run a session, then refresh.
 - **"Couldn't read OpenCode's local database"** — the database (or data directory) exists but couldn't be
   read this refresh. If you're on Go, the percent meters still refresh; quit OpenCode and refresh to
   restore the tiles. If it persists, check the permissions on `~/.local/share/opencode`.
@@ -81,3 +81,10 @@ line is `opencode-next.db` — so all channels are unioned). Both `opencode-go` 
 count. OpenCode 1 logs to the `message` table and OpenCode 2 to `session_message`; both are read, and
 completed context compactions count too. OpenCode 2 copies old messages into the new table under the
 same ID, so each message is counted once. Read-only.
+
+Go and Zen usage through pi also counts. OpenUsage reads `opencode-go` and `opencode` assistant
+messages under `~/.pi/agent/sessions/` (or `PI_CODING_AGENT_SESSION_DIR` / `PI_CODING_AGENT_DIR`),
+using pi's reported token total and recorded per-message cost. Recorded zero costs stay zero, including
+free models. Replayed messages in forked pi sessions count once. These records are merged with native
+OpenCode usage in the spend tiles, model breakdown, and trend. A pi-only user does not need OpenCode
+installed or logged in for local usage to appear; Go quota meters still require an OpenCode Go key.

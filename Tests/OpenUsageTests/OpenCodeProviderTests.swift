@@ -45,6 +45,10 @@ final class OpenCodeProviderTests: XCTestCase {
             authStore: authStore(files: files, sqlite: authSQLite, databasePaths: authDatabasePaths),
             usageClient: client ?? okClient(),
             usageScanner: scanner,
+            piUsageScanner: PiUsageScanner(
+                environment: FakeEnvironment(["PI_CODING_AGENT_SESSION_DIR": "/missing-pi-\(UUID().uuidString)"]),
+                incrementalScanner: IncrementalJSONLScanner<PiUsageScanner.Entry>()
+            ),
             now: { now }
         )
     }

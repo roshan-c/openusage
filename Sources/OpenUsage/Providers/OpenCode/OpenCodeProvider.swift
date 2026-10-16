@@ -41,7 +41,7 @@ enum OpenCodeUsageError: Error, LocalizedError, Equatable {
 }
 
 /// Tracks OpenCode-hosted usage: Go plan windows from the official usage API, plus local spend tiles
-/// and a usage trend from OpenCode's SQLite logs (Go + Zen).
+/// and a usage trend from OpenCode's SQLite logs and pi sessions (Go + Zen).
 @MainActor
 final class OpenCodeProvider: ProviderRuntime {
     let provider = Provider(
@@ -56,12 +56,13 @@ final class OpenCodeProvider: ProviderRuntime {
     let authStore: OpenCodeAuthStore
     let usageClient: OpenCodeUsageClient
     let usageScanner: OpenCodeUsageScanner
+    let piUsageScanner: PiUsageScanner
     let now: @Sendable () -> Date
 
     /// Names the local source on hover (the dollars can only undercount true account usage — this
     /// machine only). No "(estimated)": OpenCode records its own per-message cost, so the values are
     /// measured, not imputed.
-    private let sourceNote = "From your OpenCode logs"
+    private let sourceNote = "From your OpenCode and pi logs"
 
     /// Edge-triggers the auth-read-failure log so a persistently unreadable `auth.json` warns once per
     /// run, not once per 5-minute refresh.
@@ -71,11 +72,13 @@ final class OpenCodeProvider: ProviderRuntime {
         authStore: OpenCodeAuthStore = OpenCodeAuthStore(),
         usageClient: OpenCodeUsageClient = OpenCodeUsageClient(),
         usageScanner: OpenCodeUsageScanner = OpenCodeUsageScanner(),
+        piUsageScanner: PiUsageScanner = .shared,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.authStore = authStore
         self.usageClient = usageClient
         self.usageScanner = usageScanner
+        self.piUsageScanner = piUsageScanner
         self.now = now
     }
 
@@ -102,14 +105,17 @@ final class OpenCodeProvider: ProviderRuntime {
         // Same sources as `refresh()`: the local `opencode-go` auth key, or any hosted usage already in
         // the local database. Local-only, off the main actor. An unreadable auth.json is itself an
         // OpenCode footprint — enable the provider so `refresh()` can surface the actionable error.
-        await loadOffMainActor { [authStore, usageScanner] in
+        if await loadOffMainActor({ [authStore, usageScanner] in
             do {
                 if try authStore.goAPIKey() != nil { return true }
             } catch {
                 return true
             }
             return usageScanner.hasHostedUsage()
-        }
+        }) { return true }
+        // A pi-only Go/Zen user need not have OpenCode installed or signed in locally.
+        let piScan = await piUsageScanner.scan(cardID: provider.id, now: now(), pricing: .empty)
+        return piScan.map { !$0.series.daily.isEmpty || !$0.unknownModelsByDay.isEmpty } ?? false
     }
 
     func refresh() async -> ProviderSnapshot {
@@ -150,30 +156,39 @@ final class OpenCodeProvider: ProviderRuntime {
             }
         }
 
-        let scan: OpenCodeUsageScan?
+        async let pi = piUsageScanner.scan(cardID: provider.id, now: refreshedAt, pricing: .empty)
+        let nativeScan: OpenCodeUsageScan?
+        var scanError: Error?
         do {
-            scan = try await usageScanner.scan(now: refreshedAt)
+            nativeScan = try await usageScanner.scan(now: refreshedAt)
         } catch {
-            if meterLines.isEmpty {
-                return ProviderSnapshot.error(provider: provider, error: error)
-            }
+            scanError = error
             AppLog.warn(
                 LogTag.plugin("opencode"),
-                "local database unreadable; showing Go meters only: \(error.localizedDescription)"
+                "local database unreadable: \(error.localizedDescription)"
             )
-            scan = nil
+            nativeScan = nil
         }
+        // The shared pi scanner also reads other providers. An unrelated pi session must not turn a
+        // missing OpenCode source into an authoritative empty history or hide a real source error.
+        let piScan = await pi.flatMap { scan in
+            scan.series.daily.isEmpty && scan.unknownModelsByDay.isEmpty ? nil : scan
+        }
+        if let scanError, meterLines.isEmpty, piScan == nil {
+            return ProviderSnapshot.error(provider: provider, error: scanError)
+        }
+        let scan = DailyUsageAccumulator.merged([nativeScan?.logScan, piScan])
 
         var lines = meterLines
         if let scan {
             SpendTileMapper.appendTokenUsage(
-                scan.logScan.series, to: &lines, now: refreshedAt,
+                scan.series, to: &lines, now: refreshedAt,
                 estimated: false,
-                unknownModelsByDay: scan.logScan.unknownModelsByDay,
-                modelUsage: scan.logScan.modelUsage,
+                unknownModelsByDay: scan.unknownModelsByDay,
+                modelUsage: scan.modelUsage,
                 modelSourceNote: sourceNote
             )
-            SpendTileMapper.appendUsageTrend(scan.logScan.series, to: &lines, now: refreshedAt, note: sourceNote)
+            SpendTileMapper.appendUsageTrend(scan.series, to: &lines, now: refreshedAt, note: sourceNote)
         }
 
         if lines.isEmpty {
@@ -198,9 +213,9 @@ final class OpenCodeProvider: ProviderRuntime {
             refreshedAt: refreshedAt,
             usageHistory: scan.map {
                 ProviderUsageHistory(
-                    series: $0.logScan.series,
-                    modelUsage: $0.logScan.modelUsage,
-                    unknownModelsByDay: $0.logScan.unknownModelsByDay
+                    series: $0.series,
+                    modelUsage: $0.modelUsage,
+                    unknownModelsByDay: $0.unknownModelsByDay
                 )
             }
         )

@@ -9,7 +9,7 @@ import Foundation
 /// equivalent are intentionally absent and left for future work:
 /// - `nvidia-nim` — no OpenUsage card.
 ///
-/// Mapped here but not yet consumed (only Claude and Codex read the pi slice today; the rest have no
+/// Mapped here but not yet consumed (Claude, Codex, and OpenCode read the pi slice today; the rest have no
 /// local usage-trend card to fold into, or use a different spend path): `cursor` (Cursor's trend is
 /// built from its CSV export), `zai`/`zhipu`, `google-antigravity`, `github-copilot`.
 enum PiProviderMapping {
@@ -18,6 +18,8 @@ enum PiProviderMapping {
         "anthropic": "claude",
         "claude-agent-sdk": "claude",
         "openai-codex": "codex",
+        "opencode-go": "opencode",
+        "opencode": "opencode",
         "cursor": "cursor",
         "zai": "zai",
         "zhipu": "zai",

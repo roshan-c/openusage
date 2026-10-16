@@ -5,7 +5,8 @@ import Foundation
 /// spend tiles alongside its native source.
 ///
 /// Pi records an authoritative per-message `usage.cost.total` (like OpenCode), so that carried cost is
-/// used when present; when pi logs a `$0` cost (subscription usage it doesn't impute), the tokens are
+/// used when present; OpenCode's recorded $0 costs are preserved for free hosted models. For other
+/// providers, when pi logs a `$0` cost (subscription usage it doesn't impute), the tokens are
 /// priced through the shared engine instead. Codex auto-review requests from its free date use $0
 /// even when pi carries an estimate. Pi's usage shape differs from Claude Code's (`usage.input`/`output`,
 /// nested `usage.cost.total`), so it has its own parser rather than routing through those scanners.
@@ -27,7 +28,8 @@ actor PiUsageScanner {
 
     private static let sharedScanner = IncrementalJSONLScanner<Entry>(
         logTag: LogTag.plugin("pi"),
-        persistence: JSONLScanCachePersistence(namespace: "pi", schemaVersion: 1)
+        // v2: reparse unchanged files whose OpenCode Go/Zen records v1 discarded as unmapped.
+        persistence: JSONLScanCachePersistence(namespace: "pi", schemaVersion: 2)
     )
 
     static func flushPersistentCacheWrites() async {
@@ -51,7 +53,7 @@ actor PiUsageScanner {
         var timestamp: Date
         var cardID: String
         var model: String
-        /// pi's own `usage.cost.total`, used when > 0 except free Codex auto-review; nil/0 is estimated.
+        /// pi's own `usage.cost.total`; OpenCode preserves zero, other providers estimate nil/zero.
         var carriedCost: Double?
         /// The token buckets, for pricing the fall-through case.
         var tokens: TokenBreakdown
@@ -152,7 +154,7 @@ actor PiUsageScanner {
     }
 
     /// Bucket entries into local calendar days. Cost is pi's carried total when it recorded one,
-    /// except free Codex auto-review, else the timestamped tokens priced through `pricing`.
+    /// including OpenCode's recorded zero, except free Codex auto-review; otherwise use pricing.
     /// A model that can't be priced and carries no cost
     /// is excluded from the totals and surfaced as the tile's unknown-model warning, matching the log
     /// scanners.
@@ -171,7 +173,7 @@ actor PiUsageScanner {
             if cardID == "codex", CodexUsagePricing.isFreeAutoReview(model: modelName, at: entry.timestamp) {
                 // A carried estimate must not charge for free ChatGPT auto-review requests.
                 cost = 0
-            } else if let carried = entry.carriedCost, carried > 0 {
+            } else if let carried = entry.carriedCost, carried > 0 || (cardID == "opencode" && carried == 0) {
                 cost = carried
             } else if let model = trimmedModel, let estimated = estimate(model, entry.tokens, entry.timestamp) {
                 cost = estimated
